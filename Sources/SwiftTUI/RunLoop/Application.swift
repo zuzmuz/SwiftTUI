@@ -53,7 +53,7 @@ public class Application {
     }
 
     public enum InputHandled {
-        case propagate
+        case propagate(keyPress: KeyPress)
         case handled
     }
 

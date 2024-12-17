@@ -15,6 +15,8 @@ class Terminal {
         newTerminal.c_iflag &= ~tcflag_t(IXON | ICRNL)
         newTerminal.c_lflag &= ~tcflag_t(ECHO | ICANON | IEXTEN | ISIG)
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &newTerminal)
+
+        self.onInput = onInput
     }
 
     func start() {
@@ -26,10 +28,10 @@ class Terminal {
 
     private func handleInput() {
         let data = FileHandle.standardInput.availableData
-        let key = KeyPress(from: data)
-        let input = self.onInput?(key) ?? .propagate
-        if input == .propagate {
-            self.application?.handleInput(key)
+        let keyPress = KeyPress(from: data)
+        let input = self.onInput?(keyPress) ?? .propagate(keyPress: keyPress)
+        if case let .propagate(keyPress) = input {
+            self.application?.handleInput(keyPress)
         }
     }
 
