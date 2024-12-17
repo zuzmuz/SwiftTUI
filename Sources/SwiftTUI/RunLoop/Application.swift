@@ -8,16 +8,18 @@ public class Application {
     private let window: Window
     private let control: Control
     private let renderer: Renderer
+    private let terminal: Terminal
 
     private let runLoopType: RunLoopType
-
-    private var arrowKeyParser = ArrowKeyParser()
 
     private var invalidatedNodes: [Node] = []
     private var updateScheduled = false
 
-    public init<I: View>(rootView: I, runLoopType: RunLoopType = .dispatch) {
+    public init<I: View>(rootView: I,
+                         runLoopType: RunLoopType = .dispatch,
+                         onInput: ((KeyPress) -> InputHandled)? = nil) {
         self.runLoopType = runLoopType
+        self.terminal = Terminal(onInput: onInput)
 
         node = Node(view: VStack(content: rootView).view)
         node.build()
@@ -35,9 +37,8 @@ public class Application {
 
         node.application = self
         renderer.application = self
+        terminal.application = self
     }
-
-    var stdInSource: DispatchSourceRead?
 
     public enum RunLoopType {
         /// The default option, using Dispatch for the main run loop.
@@ -51,25 +52,21 @@ public class Application {
         #endif
     }
 
+    public enum InputHandled {
+        case propagate
+        case handled
+    }
+
     public func start() {
-        setInputMode()
         updateWindowSize()
         control.layout(size: window.layer.frame.size)
         renderer.draw()
 
-        let stdInSource = DispatchSource.makeReadSource(fileDescriptor: STDIN_FILENO, queue: .main)
-        stdInSource.setEventHandler(qos: .default, flags: [], handler: self.handleInput)
-        stdInSource.resume()
-        self.stdInSource = stdInSource
+        self.terminal.start()
 
         let sigWinChSource = DispatchSource.makeSignalSource(signal: SIGWINCH, queue: .main)
         sigWinChSource.setEventHandler(qos: .default, flags: [], handler: self.handleWindowSizeChange)
         sigWinChSource.resume()
-
-        signal(SIGINT, SIG_IGN)
-        let sigIntSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-        sigIntSource.setEventHandler(qos: .default, flags: [], handler: self.stop)
-        sigIntSource.resume()
 
         switch runLoopType {
         case .dispatch:
@@ -82,54 +79,38 @@ public class Application {
         }
     }
 
-    private func setInputMode() {
-        var tattr = termios()
-        tcgetattr(STDIN_FILENO, &tattr)
-        tattr.c_lflag &= ~tcflag_t(ECHO | ICANON)
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &tattr);
-    }
-
-    private func handleInput() {
-        let data = FileHandle.standardInput.availableData
-
-        guard let string = String(data: data, encoding: .utf8) else {
-            return
-        }
-
-        for char in string {
-            if arrowKeyParser.parse(character: char) {
-                guard let key = arrowKeyParser.arrowKey else { continue }
-                arrowKeyParser.arrowKey = nil
-                if key == .down {
-                    if let next = window.firstResponder?.selectableElement(below: 0) {
-                        window.firstResponder?.resignFirstResponder()
-                        window.firstResponder = next
-                        window.firstResponder?.becomeFirstResponder()
-                    }
-                } else if key == .up {
-                    if let next = window.firstResponder?.selectableElement(above: 0) {
-                        window.firstResponder?.resignFirstResponder()
-                        window.firstResponder = next
-                        window.firstResponder?.becomeFirstResponder()
-                    }
-                } else if key == .right {
-                    if let next = window.firstResponder?.selectableElement(rightOf: 0) {
-                        window.firstResponder?.resignFirstResponder()
-                        window.firstResponder = next
-                        window.firstResponder?.becomeFirstResponder()
-                    }
-                } else if key == .left {
-                    if let next = window.firstResponder?.selectableElement(leftOf: 0) {
-                        window.firstResponder?.resignFirstResponder()
-                        window.firstResponder = next
-                        window.firstResponder?.becomeFirstResponder()
-                    }
+    func handleInput(_ keyPress: KeyPress) {
+        switch (keyPress.key, keyPress.modifiers) {
+            case (.down, .none):
+                if let next = window.firstResponder?.selectableElement(below: 0) {
+                    window.firstResponder?.resignFirstResponder()
+                    window.firstResponder = next
+                    window.firstResponder?.becomeFirstResponder()
                 }
-            } else if char == ASCII.EOT {
+            case (.up, .none):
+                if let next = window.firstResponder?.selectableElement(above: 0) {
+                    window.firstResponder?.resignFirstResponder()
+                    window.firstResponder = next
+                    window.firstResponder?.becomeFirstResponder()
+                }
+            case (.right, .none):
+                if let next = window.firstResponder?.selectableElement(rightOf: 0) {
+                    window.firstResponder?.resignFirstResponder()
+                    window.firstResponder = next
+                    window.firstResponder?.becomeFirstResponder()
+                }
+            case (.left, .none):
+                if let next = window.firstResponder?.selectableElement(leftOf: 0) {
+                    window.firstResponder?.resignFirstResponder()
+                    window.firstResponder = next
+                    window.firstResponder?.becomeFirstResponder()
+                }
+            case (.character("C"), .ctrl):
                 stop()
-            } else {
+            case (.character(let char), .none):
                 window.firstResponder?.handleEvent(char)
-            }
+            default:
+                break
         }
     }
 
@@ -176,17 +157,6 @@ public class Application {
 
     private func stop() {
         renderer.stop()
-        resetInputMode() // Fix for: https://github.com/rensbreur/SwiftTUI/issues/25
         exit(0)
     }
-
-    /// Fix for: https://github.com/rensbreur/SwiftTUI/issues/25
-    private func resetInputMode() {
-        // Reset ECHO and ICANON values:
-        var tattr = termios()
-        tcgetattr(STDIN_FILENO, &tattr)
-        tattr.c_lflag |= tcflag_t(ECHO | ICANON)
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &tattr);
-    }
-
 }
